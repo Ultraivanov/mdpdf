@@ -121,7 +121,7 @@ const options = {
 	}
 };
 
-mdpdf.convert(options).then(pdfPath => {
+return mdpdf.convert(options).then(pdfPath => {
 	console.log('✨ PDF created successfully at:', pdfPath);
 }).catch(err => {
 	console.error(err);

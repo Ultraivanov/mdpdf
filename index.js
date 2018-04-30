@@ -7,11 +7,12 @@ const Promise = require('bluebird');
 const showdown = require('showdown');
 const showdownEmoji = require('showdown-emoji');
 const cheerio = require('cheerio');
-const pdf = require('html-pdf');
+const puppeteer = require('puppeteer');
 const Handlebars = require('handlebars');
 const loophole = require('loophole');
 
 const readFile = Promise.promisify(fs.readFile);
+const writeFile = Promise.promisify(fs.writeFile);
 
 // Main layout template
 const layoutPath = path.join(__dirname, 'layout.hbs');
@@ -171,16 +172,42 @@ function convert(options) {
 }
 
 function createPdf(html, options) {
-    // Promisify won't work due to html-pdf's construction so
-    // we wrap it in a promise ourselves.
-	return new Promise((resolve, reject) => {
-		pdf.create(html, options.pdf).toFile(options.destination, (err, res) => {
-			if (err) {
-				reject(err);
-			} else {
-				resolve(res.filename);
+	// Write html to a temp file
+	let browser;
+	let page;
+
+	const tempHtmlPath = path.join(path.dirname(options.destination), '_temp.html');
+	
+	return writeFile(tempHtmlPath, html).then(() => {
+		return puppeteer.launch({ headless: true });
+	}).then(newBrowser => {
+		browser = newBrowser
+		return browser.newPage();
+	}).then(p => {
+		page = p;
+
+		return page.goto('file:' + tempHtmlPath, { waitUntil: 'networkidle2' });
+	}).then(() => {
+		const puppetOptions = {
+			path: options.destination,
+			displayHeaderFooter: false,
+			printBackground: true,
+			format: options.pdf.format,
+			margin: {
+				top: options.pdf.border.top,
+				right: options.pdf.border.right,
+				bottom: options.pdf.border.bottom,
+				left: options.pdf.border.left
 			}
-		});
+		};
+
+		return page.pdf(puppetOptions);
+	}).then(() => {
+		return browser.close();
+	}).then(() => {
+		fs.unlinkSync(tempHtmlPath);
+
+		return options.destination;
 	});
 }
 
