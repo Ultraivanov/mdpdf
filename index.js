@@ -15,7 +15,9 @@ const readFile = Promise.promisify(fs.readFile);
 const writeFile = Promise.promisify(fs.writeFile);
 
 // Main layout template
-const layoutPath = path.join(__dirname, 'layout.hbs');
+const layoutPath = path.join(__dirname, '/layouts/doc-body.hbs');
+const headerLayoutPath = path.join(__dirname, '/layouts/header.hbs');
+const footerLayoutPath = path.join(__dirname, '/layouts/footer.hbs');
 
 // Syntax highlighting
 const highlightJs = 'file://' + path.join(__dirname, '/assets/highlight/highlight.pack.js');
@@ -121,54 +123,77 @@ function convert(options) {
 	options.assetDir = path.dirname(path.resolve(options.source));
 
 	let template = {};
+	let css = new Handlebars.SafeString(getAllStyles(options))
 	const local = {
 		highlightJs,
-		css: new Handlebars.SafeString(getAllStyles(options))
+		css: css
 	};
 
-    // Read the layout and compile it
-	return readFile(layoutPath, 'utf8').then(layout => {
+	// Pull in the header
+	return prepareHeader(options).then(header => {
+		options.header = header;
+
+		// Pull in the footer
+		return prepareFooter(options);
+	}).then(footer => {
+		options.footer = footer;
+
+		// Pull in the handlebars layout so we can build the document body
+		return readFile(layoutPath, 'utf8')
+	}).then(layout => {
 		template = Handlebars.compile(layout);
 
-		if (options.header) {
-			return readFile(options.header, 'utf8');
-		}
-		Promise.resolve();
-	}).then(headerContent => {
-		if (headerContent) {
-			const preparedHeader = qualifyImgSources(headerContent, options);
-			local.header = new Handlebars.SafeString(preparedHeader);
-		}
-
-		if (options.footer) {
-			return readFile(options.footer, 'utf8');
-		}
-		Promise.resolve();
-	}).then(footerContent => {
-		if (footerContent) {
-			const preparedFooter = qualifyImgSources(footerContent, options);
-			local.footer = new Handlebars.SafeString(preparedFooter);
-		}
-
+		// Pull in the document source markdown
 		return readFile(options.source, 'utf8');
-	}).then(md => {
-		let content = parseMarkdownToHtml(md, !options.noEmoji);
+	}).then(mdDoc => {
+		// Compile the main document
+		let content = parseMarkdownToHtml(mdDoc, !options.noEmoji);
 
 		content = qualifyImgSources(content, options);
 
-        // Append final html to the template body
 		local.body = new Handlebars.SafeString(content);
-
-        // Generate html from layout and templates
+		// Use loophole for this body template to avoid issues with editor extensions
 		const html = loophole.allowUnsafeNewFunction(() => template(local));
-
-		if (options.debug) {
-            // Write debug html
-			fs.writeFileSync(options.debug, html);
-		}
 
 		return createPdf(html, options);
 	});
+}
+
+function prepareHeader(options) {
+	if (options.header) {
+		let headerTemplate;
+
+		// Get the hbs layout
+		return readFile(headerLayoutPath, 'utf8').then(headerLayout => {
+			headerTemplate = Handlebars.compile(headerLayout);
+
+			// Get the header html
+			return readFile(options.header, 'utf8');
+		}).then(headerContent => {
+			const preparedHeader = qualifyImgSources(headerContent, options);
+			
+			// Compile the header template
+			const headerHtml = headerTemplate({
+				content: new Handlebars.SafeString(preparedHeader)
+			});
+
+			return headerHtml;
+		});
+	} else {
+		return Promise.resolve();
+	}
+}
+
+function prepareFooter(options) {
+	if (options.footer) {
+		return readFile(options.footer, 'utf8').then(footerContent => {
+			const preparedFooter = qualifyImgSources(footerContent, options);
+
+			return preparedFooter;
+		});
+	} else {
+		return Promise.resolve();
+	}
 }
 
 function createPdf(html, options) {
@@ -198,7 +223,10 @@ function createPdf(html, options) {
 				right: options.pdf.border.right,
 				bottom: options.pdf.border.bottom,
 				left: options.pdf.border.left
-			}
+			},
+			displayHeaderFooter: !!options.header || !!options.footer,
+			headerTemplate: options.header || null,
+			footerTemplate: options.footer || null
 		};
 
 		return page.pdf(puppetOptions);
